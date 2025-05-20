@@ -10,7 +10,7 @@ import { isProcTExp, makeBoolTExp, makeNumTExp, makeProcTExp, makeStrTExp, makeV
          parseTE, unparseTExp,
          BoolTExp, NumTExp, StrTExp, TExp, VoidTExp } from "./TExp";
 import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '../shared/list';
-import { Result, makeFailure, bind, makeOk, zipWithResult } from '../shared/result';
+import { Result, makeFailure, bind, makeOk, zipWithResult, isOk } from '../shared/result';
 import { parse as p } from "../shared/parser";
 import { format } from '../shared/format';
 
@@ -214,7 +214,14 @@ export const typeofLetrec = (exp: LetrecExp, tenv: TEnv): Result<TExp> => {
 // TODO - write the true definition
 export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
     // return Error("TODO");
-    return makeOk(makeVoidTExp());
+    const result = typeofExp(exp.val, tenv);
+    if (isOk(result)) {
+        const varTE = exp.var.texp;
+        const valTE = result.value;
+        const constraint = checkEqualType(varTE, valTE, exp);
+        return bind(constraint, _ => makeOk(makeVoidTExp()));
+    }
+    return makeFailure("Type mismatch");
 };
 
 // Purpose: compute the type of a program
