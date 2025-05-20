@@ -222,3 +222,10 @@ export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
 // TODO - write the true definition
 export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> =>
     makeFailure("TODO");
+
+
+// Purpose: compute the type of a concrete fully-typed expression
+// TODO: finish ths function
+export const L5programTypeof = (concreteExp: string): Result<string> =>
+    makeFailure("TODO");
+
