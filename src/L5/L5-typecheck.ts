@@ -230,42 +230,41 @@ export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
 // Typing rule:
 // The type of a program is the type of the last expression, after threading the environment through all definitions.
 export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
-    // Thread the environment through all definitions, then type the last expression
-    let env = tenv;
-    let lastType: Result<TExp> = makeFailure("Empty program");
-    exp.exps.map((e) => {
+    const processExp = ([env, _]: [TEnv, Result<TExp>], e: Exp): [TEnv, Result<TExp>] => {
         if (isDefineExp(e)) {
-            // Check the type of the value
             const valType = typeofExp(e.val, env);
-            if (valType.tag === "Failure") return valType;
+            if (valType.tag === "Failure") return [env, valType];
             const constraint = checkEqualType(e.var.texp, valType.value, e);
-            if (constraint.tag === "Failure") return constraint;
-            env = makeExtendTEnv([e.var.var], [e.var.texp], env);
-            lastType = makeOk(makeVoidTExp());
+            if (constraint.tag === "Failure") return [env, constraint];
+            const newEnv = makeExtendTEnv([e.var.var], [e.var.texp], env);
+            return [newEnv, makeOk(makeVoidTExp())];
         } else {
-            lastType = typeofExp(e, env);
+            const texp = typeofExp(e, env);
+            return [env, texp];
         }
-    })
+    };
 
+    if (!("exps" in exp)) {
+        return makeFailure("Expression is not a Program") as Result<TExp>;
+    }
+
+    if (exp.exps.length === 0) {
+        return makeFailure("Empty program") as Result<TExp>;
+    }
+
+    const [, lastType] = exp.exps.reduce(
+        processExp,
+        [tenv, makeFailure("Empty program") as Result<TExp>]
+    );
     return lastType;
 };
 
 // Purpose: compute the type of a concrete fully-typed program string
-export const L5programTypeof = (concreteExp: string): Result<string> => {
-    const program = parseL5(concreteExp);
-    if (isFailure(program)) {
-        return makeFailure("Parse error");
-    }
-    else {
-        const parsedProgram = program.value;
-        if (!isProgram(parsedProgram)) {
-            return makeFailure("Not a program");
-        }
-        const result = typeofProgram(parsedProgram, makeEmptyTEnv());
-        if (isFailure(result)) {
-            return makeFailure("Type error");
-        }
-        return unparseTExp(result.value);
-    }
-};
+export const L5programTypeof = (concreteExp: string): Result<string> =>
+    bind(parseL5(concreteExp), (parsedProgram) =>
+        isProgram(parsedProgram)
+            ? bind(typeofProgram(parsedProgram, makeEmptyTEnv()), (te) =>
+                unparseTExp(te))
+            : makeFailure("Not a program")
+    );
 
