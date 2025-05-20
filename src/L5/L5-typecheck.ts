@@ -4,13 +4,14 @@ import { equals, map, zipWith } from 'ramda';
 import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isNumExp,
          isPrimOp, isProcExp, isProgram, isStrExp, isVarRef, parseL5Exp, unparse,
          AppExp, BoolExp, DefineExp, Exp, IfExp, LetrecExp, LetExp, NumExp,
-         Parsed, PrimOp, ProcExp, Program, StrExp } from "./L5-ast";
+         Parsed, PrimOp, ProcExp, Program, StrExp, 
+         parseL5} from "./L5-ast";
 import { applyTEnv, makeEmptyTEnv, makeExtendTEnv, TEnv } from "./TEnv";
 import { isProcTExp, makeBoolTExp, makeNumTExp, makeProcTExp, makeStrTExp, makeVoidTExp,
          parseTE, unparseTExp,
          BoolTExp, NumTExp, StrTExp, TExp, VoidTExp } from "./TExp";
 import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '../shared/list';
-import { Result, makeFailure, bind, makeOk, zipWithResult, isOk } from '../shared/result';
+import { Result, makeFailure, bind, makeOk, zipWithResult, isOk, isFailure } from '../shared/result';
 import { parse as p } from "../shared/parser";
 import { format } from '../shared/format';
 
@@ -206,14 +207,11 @@ export const typeofLetrec = (exp: LetrecExp, tenv: TEnv): Result<TExp> => {
 };
 
 // Typecheck a full program
-// TODO: Thread the TEnv (as in L1)
 
 // Purpose: compute the type of a define
 // Typing rule:
 //   (define (var : texp) val)
-// TODO - write the true definition
 export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
-    // return Error("TODO");
     const result = typeofExp(exp.val, tenv);
     if (isOk(result)) {
         const varTE = exp.var.texp;
@@ -226,13 +224,43 @@ export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
 
 // Purpose: compute the type of a program
 // Typing rule:
-// TODO - write the true definition
-export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> =>
-    makeFailure("TODO");
+// The type of a program is the type of the last expression, after threading the environment through all definitions.
+export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
+    // Thread the environment through all definitions, then type the last expression
+    let env = tenv;
+    let lastType: Result<TExp> = makeFailure("Empty program");
+    for (const e of exp.exps) {
+        if (isDefineExp(e)) {
+            // Check the type of the value
+            const valType = typeofExp(e.val, env);
+            if (valType.tag === "Failure") return valType;
+            const constraint = checkEqualType(e.var.texp, valType.value, e);
+            if (constraint.tag === "Failure") return constraint;
+            env = makeExtendTEnv([e.var.var], [e.var.texp], env);
+            lastType = makeOk(makeVoidTExp());
+        } else {
+            lastType = typeofExp(e, env);
+        }
+    }
+    return lastType;
+};
 
-
-// Purpose: compute the type of a concrete fully-typed expression
-// TODO: finish ths function
-export const L5programTypeof = (concreteExp: string): Result<string> =>
-    makeFailure("TODO");
+// Purpose: compute the type of a concrete fully-typed program string
+export const L5programTypeof = (concreteExp: string): Result<string> => {
+    const program = parseL5(concreteExp);
+    if (isFailure(program)) {
+        return makeFailure("Parse error");
+    }
+    else {
+        const parsedProgram = program.value;
+        if (!isProgram(parsedProgram)) {
+            return makeFailure("Not a program");
+        }
+        const result = typeofProgram(parsedProgram, makeEmptyTEnv());
+        if (isFailure(result)) {
+            return makeFailure("Type error");
+        }
+        return unparseTExp(result.value);
+    }
+};
 
