@@ -1,6 +1,6 @@
 // L5-typecheck
 // ========================================================
-import { equals, map, zipWith } from 'ramda';
+import { equals, is, map, zipWith } from 'ramda';
 import {
     isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isNumExp,
     isPrimOp, isProcExp, isProgram, isStrExp, isVarRef, parseL5Exp, unparse,
@@ -14,12 +14,17 @@ import {
     parseTE, unparseTExp,
     BoolTExp, NumTExp, StrTExp, TExp, VoidTExp,
     isTVar,
-    TVar
+    TVar,
+    makePairTExp,
+    isPairTExp
 } from "./TExp";
 import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList, cons } from '../shared/list';
 import { Result, makeFailure, bind, makeOk, zipWithResult, isOk, isFailure } from '../shared/result';
 import { parse as p } from "../shared/parser";
 import { format } from '../shared/format';
+import { isLitExp, LitExp } from "./L5-ast";
+import { SExpValue, isCompoundSExp, isSymbolSExp } from "./L5-value";
+import {makeTVar } from "./TExp";
 
 // Purpose: Check that type expressions are equivalent
 // as part of a fully-annotated type check process of exp.
@@ -40,6 +45,18 @@ const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
     if (te1.tag === "PairTExp" && te2.tag === "PairTExp") {
         return bind(checkEqualType(te1.carTE, te2.carTE, exp), () =>
             checkEqualType(te1.cdrTE, te2.cdrTE, exp));
+    }
+
+    if (te1.tag === "ProcTExp" && te2.tag === "ProcTExp") {
+        // Check if the procedure types match
+        if (te1.paramTEs.length !== te2.paramTEs.length) {
+            return bind(unparseTExp(te1), (te1Str: string) =>
+                bind(unparseTExp(te2), (te2Str: string) =>
+                    bind(unparse(exp), (expStr: string) =>
+                        makeFailure<true>(`Incompatible procedure types: ${te1Str} and ${te2Str} in ${expStr}`))));
+        }
+        const paramChecks = zipWithResult((p1, p2) => checkEqualType(p1, p2, exp), te1.paramTEs, te2.paramTEs);
+        return bind(paramChecks, () => checkEqualType(te1.returnTE, te2.returnTE, exp));
     }
 
     // Check for structural equality
@@ -99,8 +116,8 @@ export const typeofExp = (exp: Parsed, tenv: TEnv): Result<TExp> =>
                                         isLetrecExp(exp) ? typeofLetrec(exp, tenv) :
                                             isDefineExp(exp) ? typeofDefine(exp, tenv) :
                                                 isProgram(exp) ? typeofProgram(exp, tenv) :
-                                                    // TODO: isSetExp(exp) isLitExp(exp)
-                                                    makeFailure(`Unknown type: ${format(exp)}`);
+                                                    isLitExp(exp) ? typeofLitExp(exp) :
+                                                        makeFailure(`Unknown type: ${format(exp)}`);
 
 // Purpose: Compute the type of a sequence of expressions
 // Check all the exps in a sequence - return type of last.
@@ -152,7 +169,7 @@ export const typeofPrim = (p: PrimOp): Result<TExp> =>
                                                                                     (p.op === 'cons') ? parseTE('(T1 * T2 -> (Pair T1 T2))') :
                                                                                         (p.op === 'car') ? parseTE('((Pair T1 T2) -> T1)') :
                                                                                             (p.op === 'cdr') ? parseTE('((Pair T1 T2) -> T2)') :
-                                                                                    makeFailure(`Primitive not yet implemented: ${p.op}`);
+                                                                                                makeFailure(`Primitive not yet implemented: ${p.op}`);
 
 // Purpose: compute the type of an if-exp
 // Typing rule:
@@ -193,8 +210,36 @@ export const typeofProc = (proc: ProcExp, tenv: TEnv): Result<TExp> => {
 //      type<randn>(tenv) = tn
 // then type<(rator rand1...randn)>(tenv) = t
 // We also check the correct number of arguments is passed.
-export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> =>
-    bind(typeofExp(app.rator, tenv), (ratorTE: TExp) => {
+export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> => {
+    if (isPrimOp(app.rator)) {
+        if (app.rator.op == 'cons')
+            return bind(typeofExp(app.rands[0], tenv), (carTE: TExp) =>
+                bind(typeofExp(app.rands[1], tenv), (cdrTE: TExp) =>
+                    makeOk(makePairTExp(carTE, cdrTE))));
+        else if (app.rator.op == 'car') {
+            if (isVarRef(app.rands[0])) {
+                return bind(applyTEnv(tenv, app.rands[0].var), (pairTE: TExp) => isPairTExp(pairTE) ? makeOk(pairTE.carTE) :
+                    makeFailure<TExp>(`car applied to non-pair: ${unparse(app.rands[0])}`));
+            }
+            else {
+                return bind(typeofExp(app.rands[0], tenv), (pairTE: TExp) =>
+                    isPairTExp(pairTE) ? makeOk(pairTE.carTE) :
+                        makeFailure<TExp>(`car applied to non-pair: ${unparse(app.rands[0])}`));
+            }
+        }
+        else if (app.rator.op == 'cdr') {
+            if (isVarRef(app.rands[0])) {
+                return bind(applyTEnv(tenv, app.rands[0].var), (pairTE: TExp) => isPairTExp(pairTE) ? makeOk(pairTE.cdrTE) :
+                    makeFailure<TExp>(`cdr applied to non-pair: ${unparse(app.rands[0])}`));
+            }
+            else {
+                return bind(typeofExp(app.rands[0], tenv), (pairTE: TExp) =>
+                    isPairTExp(pairTE) ? makeOk(pairTE.cdrTE) :
+                        makeFailure<TExp>(`cdr applied to non-pair: ${unparse(app.rands[0])}`));
+            }
+        }
+    }
+    return bind(typeofExp(app.rator, tenv), (ratorTE: TExp) => {
         if (!isProcTExp(ratorTE)) {
             return bind(unparseTExp(ratorTE), (rator: string) =>
                 bind(unparse(app), (exp: string) =>
@@ -210,6 +255,7 @@ export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> =>
             app.rands, ratorTE.paramTEs);
         return bind(constraints, _ => makeOk(ratorTE.returnTE));
     });
+}
 
 // Purpose: compute the type of a let-exp
 // Typing rule:
@@ -317,4 +363,26 @@ export const L5programTypeof = (concreteExp: string): Result<string> =>
                 unparseTExp(te))
             : makeFailure("Not a program")
     );
+
+// Purpose: Compute the type of a literal expression
+const typeofLitExp = (le: LitExp): Result<TExp> => {
+    // Recursively map an S-expression value to a TExp
+    const sexpToTExp = (v: SExpValue): TExp =>
+        isCompoundSExp(v)
+            ? makePairTExp(sexpToTExp(v.val1), sexpToTExp(v.val2))
+            : typeof v === "number"
+                ? makeNumTExp()
+                : typeof v === "boolean"
+                    ? makeBoolTExp()
+                    : (isSymbolSExp(v) && isTypeVarName(v.val))
+                        ? makeTVar(v.val)
+                        : (typeof v === "string" && isTypeVarName(v))
+                            ? makeTVar(v)
+                            : makeTVar("literal");
+    return makeOk(sexpToTExp(le.val));
+};
+
+// Helper: recognize type variable names (e.g., "T", "T1", "T2")
+const isTypeVarName = (s: string): boolean =>
+    /^T\d*$/.test(s);
 
