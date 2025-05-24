@@ -46,7 +46,7 @@ export type AtomicTExp = NumTExp | BoolTExp | StrTExp | VoidTExp;
 export const isAtomicTExp = (x: any): x is AtomicTExp =>
     isNumTExp(x) || isBoolTExp(x) || isStrTExp(x) || isVoidTExp(x);
 
-export type CompoundTExp = ProcTExp | TupleTExp;
+export type CompoundTExp = ProcTExp | TupleTExp | PairTExp;
 export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x);
 
 export type NonTupleTExp = AtomicTExp | ProcTExp | TVar;
@@ -68,6 +68,12 @@ export const isStrTExp = (x: any): x is StrTExp => x.tag === "StrTExp";
 export type VoidTExp = { tag: "VoidTExp" };
 export const makeVoidTExp = (): VoidTExp => ({tag: "VoidTExp"});
 export const isVoidTExp = (x: any): x is VoidTExp => x.tag === "VoidTExp";
+
+// PairTExp: Pair of TExps
+export type PairTExp = { tag: "PairTExp"; carTE: TExp; cdrTE: TExp; };
+export const makePairTExp = (carTE: TExp, cdrTE: TExp): PairTExp => 
+    ({tag: "PairTExp", carTE: carTE, cdrTE: cdrTE});
+export const isPairTExp = (x: any): x is PairTExp => x.tag === "PairTExp";
 
 // proc-te(param-tes: list(te), return-te: te)
 export type ProcTExp = { tag: "ProcTExp"; paramTEs: TExp[]; returnTE: TExp; };
@@ -163,9 +169,10 @@ export const parseTExp = (texp: Sexp): Result<TExp> =>
 ;; expected exactly one -> in the list
 ;; We do not accept (a -> b -> c) - must parenthesize
 */
-const parseCompoundTExp = (texps: Sexp[]): Result<ProcTExp> => {
+const parseCompoundTExp = (texps: Sexp[]): Result<CompoundTExp> => {
     const pos = texps.indexOf('->');
-    return (pos === -1)  ? makeFailure(`Procedure type expression without -> - ${format(texps)}`) :
+    return texps[0] == "Pair" && (pos === -1) ? prasePairTExp(texps) :
+            (pos === -1)  ? makeFailure(`Procedure type expression without -> - ${format(texps)}`) :
            (pos === 0) ? makeFailure(`No param types in proc texp - ${format(texps)}`) :
            (pos === texps.length - 1) ? makeFailure(`No return type in proc texp - ${format(texps)}`) :
            (texps.slice(pos + 1).indexOf('->') > -1) ? makeFailure(`Only one -> allowed in a procexp - ${format(texps)}`) :
@@ -173,6 +180,13 @@ const parseCompoundTExp = (texps: Sexp[]): Result<ProcTExp> => {
                mapv(parseTExp(texps[pos + 1]), (returnTE: TExp) =>
                     makeProcTExp(args, returnTE)));
 };
+
+export const prasePairTExp = (texps: Sexp[]): Result<PairTExp> => 
+    (texps.length !== 3) ?
+        makeFailure(`Expected Pair TExp with 2 elements, got ${format(texps)}`) :
+        bind(parseTExp(texps[1]), (carTE: TExp) =>
+            bind(parseTExp(texps[2]), (cdrTE: TExp) =>
+                makeOk(makePairTExp(carTE, cdrTE))));
 
 /*
 ;; Expected structure: <te1> [* <te2> ... * <ten>]?
@@ -215,6 +229,9 @@ export const unparseTExp = (te: TExp): Result<string> => {
         isEmptyTupleTExp(x) ? makeOk("Empty") :
         isNonEmptyTupleTExp(x) ? unparseTuple(x.TEs) :
         x === undefined ? makeFailure("Undefined TVar") :
+        isPairTExp(x) ? bind(unparseTExp(x.carTE), (car: string) =>
+                        bind(unparseTExp(x.cdrTE), (cdr: string) =>
+                                    makeOk(`(${car} * ${cdr})`))) :
         x;
 
     const unparsed = up(te);
