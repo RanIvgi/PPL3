@@ -1,22 +1,4 @@
-// L5-typecheck
-// ========================================================
-// Type checking for the L5 language.
-// This module provides type inference and checking for L5 ASTs, including support for
-// polymorphic functions, pairs, and quoted expressions.
-//
-// Notes:
-// - Type variables (TVar) are unified structurally, supporting polymorphism.
-// - Pair types are supported via PairTExp, and cons/car/cdr primitives are typed accordingly.
-// - Quoted expressions are handled in typeofLitExp, with quoted symbols and empty lists
-//   treated as "literal" TVars, and quoted pairs recursively typed as PairTExp.
-// - The type environment (TEnv) is threaded functionally through the program and definitions.
-// - The type checker is designed to be functional and side-effect free, except for TVar unification
-//   (which mutates TVar contents for unification).
-//
-// Author: (your name or course info)
-// Date: (date or semester)
-//
-
+// L5-typecheck.ts
 import { equals, is, map, zipWith } from 'ramda';
 import {
     isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isNumExp,
@@ -49,13 +31,6 @@ import { makeTVar } from "./TExp";
  * Returns a Result<true> on success, or a Failure with a descriptive message.
  */
 const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
-    // Unify type variables
-    if (te1.tag === "TVar") {
-        return unifyTVar(te1, te2, exp);
-    }
-    if (te2.tag === "TVar") {
-        return unifyTVar(te2, te1, exp);
-    }
 
     // Structural check for pairs
     if (te1.tag === "PairTExp" && te2.tag === "PairTExp") {
@@ -81,27 +56,6 @@ const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
             bind(unparseTExp(te2), (te2: string) =>
                 bind(unparse(exp), (exp: string) =>
                     makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
-};
-
-/**
- * Unifies a type variable with another type expression.
- * If the TVar is unbound, it is bound to the given type.
- * If already bound, recursively unify or check for compatibility.
- */
-const unifyTVar = (tvar: TVar, texp: TExp, exp: Exp): Result<true> => {
-    if (tvar.contents[0] === undefined) {
-        tvar.contents[0] = texp;
-        return makeOk(true);
-    } else {
-        const boundType = tvar.contents[0];
-        if (equals(boundType, texp)) {
-            return makeOk(true);
-        } else if (isTVar(boundType)) {
-            return unifyTVar(boundType, texp, exp);
-        } else {
-            return checkEqualType(boundType, texp, exp);
-        }
-    }
 };
 
 /**
@@ -383,7 +337,7 @@ const typeofLitExp = (le: LitExp): Result<TExp> => {
                         ? makeBoolTExp()
                         : typeof v === "string"
                             ? makeStrTExp()
-                            : makeTVar("literal");                // fall-back
+                            : makeTVar("literal");
 
     // *Top-level* atoms are always typed as the polymorphic “literal”
     return makeOk(
