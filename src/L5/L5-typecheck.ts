@@ -1,5 +1,22 @@
 // L5-typecheck
 // ========================================================
+// Type checking for the L5 language.
+// This module provides type inference and checking for L5 ASTs, including support for
+// polymorphic functions, pairs, and quoted expressions.
+//
+// Notes:
+// - Type variables (TVar) are unified structurally, supporting polymorphism.
+// - Pair types are supported via PairTExp, and cons/car/cdr primitives are typed accordingly.
+// - Quoted expressions are handled in typeofLitExp, with quoted symbols and empty lists
+//   treated as "literal" TVars, and quoted pairs recursively typed as PairTExp.
+// - The type environment (TEnv) is threaded functionally through the program and definitions.
+// - The type checker is designed to be functional and side-effect free, except for TVar unification
+//   (which mutates TVar contents for unification).
+//
+// Author: (your name or course info)
+// Date: (date or semester)
+//
+
 import { equals, is, map, zipWith } from 'ramda';
 import {
     isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isNumExp,
@@ -26,14 +43,13 @@ import { isLitExp, LitExp } from "./L5-ast";
 import { SExpValue, isCompoundSExp, isEmptySExp, isSymbolSExp } from "./L5-value";
 import { makeTVar } from "./TExp";
 
-// Purpose: Check that type expressions are equivalent
-// as part of a fully-annotated type check process of exp.
-// Return an error if the types are different - true otherwise.
-// Exp is only passed for documentation purposes.
+/**
+ * Checks that two type expressions are equivalent, supporting TVar unification and
+ * structural comparison for pairs and procedures.
+ * Returns a Result<true> on success, or a Failure with a descriptive message.
+ */
 const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
-    // console.log("checkEqualType: ", te1, te2, exp);
-
-    // Handle TVar unification
+    // Unify type variables
     if (te1.tag === "TVar") {
         return unifyTVar(te1, te2, exp);
     }
@@ -41,14 +57,14 @@ const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
         return unifyTVar(te2, te1, exp);
     }
 
-    // Handle PairTExp (compound types)
+    // Structural check for pairs
     if (te1.tag === "PairTExp" && te2.tag === "PairTExp") {
         return bind(checkEqualType(te1.carTE, te2.carTE, exp), () =>
             checkEqualType(te1.cdrTE, te2.cdrTE, exp));
     }
 
+    // Structural check for procedures
     if (te1.tag === "ProcTExp" && te2.tag === "ProcTExp") {
-        // Check if the procedure types match
         if (te1.paramTEs.length !== te2.paramTEs.length) {
             return bind(unparseTExp(te1), (te1Str: string) =>
                 bind(unparseTExp(te2), (te2Str: string) =>
@@ -59,7 +75,7 @@ const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
         return bind(paramChecks, () => checkEqualType(te1.returnTE, te2.returnTE, exp));
     }
 
-    // Check for structural equality
+    // Fallback: check for deep equality
     return equals(te1, te2) ? makeOk(true) :
         bind(unparseTExp(te1), (te1: string) =>
             bind(unparseTExp(te2), (te2: string) =>
@@ -67,42 +83,40 @@ const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
                     makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
 };
 
+/**
+ * Unifies a type variable with another type expression.
+ * If the TVar is unbound, it is bound to the given type.
+ * If already bound, recursively unify or check for compatibility.
+ */
 const unifyTVar = (tvar: TVar, texp: TExp, exp: Exp): Result<true> => {
-    // console.log("unifyTVar: ", tvar, texp, exp);
-
     if (tvar.contents[0] === undefined) {
-        // If the TVar is unbound, bind it to the given type
         tvar.contents[0] = texp;
         return makeOk(true);
     } else {
-        // If the TVar is already bound, check for compatibility
         const boundType = tvar.contents[0];
         if (equals(boundType, texp)) {
-            return makeOk(true); // Already compatible
+            return makeOk(true);
         } else if (isTVar(boundType)) {
-            // Recursively unify if the bound type is another TVar
             return unifyTVar(boundType, texp, exp);
         } else {
-            // Otherwise, check structural compatibility
             return checkEqualType(boundType, texp, exp);
         }
     }
 };
 
-// Compute the type of L5 AST exps to TE
-// ===============================================
-// Compute a Typed-L5 AST exp to a Texp on the basis
-// of its structure and the annotations it contains.
-
-// Purpose: Compute the type of a concrete fully-typed expression
+/**
+ * Computes the type of a concrete fully-typed expression string.
+ */
 export const L5typeof = (concreteExp: string): Result<string> =>
     bind(p(concreteExp), (x) =>
         bind(parseL5Exp(x), (e: Exp) =>
             bind(typeofExp(e, makeEmptyTEnv()), unparseTExp)));
 
-// Purpose: Compute the type of an expression
-// Traverse the AST and check the type according to the exp type.
-// We assume that all variables and procedures have been explicitly typed in the program.
+/**
+ * Computes the type of an L5 AST expression, traversing the AST and checking types
+ * according to the expression type.
+ * All variables and procedures must be explicitly typed in the program.
+ */
 export const typeofExp = (exp: Parsed, tenv: TEnv): Result<TExp> =>
     isNumExp(exp) ? makeOk(typeofNum(exp)) :
         isBoolExp(exp) ? makeOk(typeofBool(exp)) :
@@ -119,31 +133,31 @@ export const typeofExp = (exp: Parsed, tenv: TEnv): Result<TExp> =>
                                                     isLitExp(exp) ? typeofLitExp(exp) :
                                                         makeFailure(`Unknown type: ${format(exp)}`);
 
-// Purpose: Compute the type of a sequence of expressions
-// Check all the exps in a sequence - return type of last.
-// Pre-conditions: exps is not empty.
+/**
+ * Computes the type of a sequence of expressions, returning the type of the last.
+ * Pre-condition: exps is not empty.
+ */
 export const typeofExps = (exps: List<Exp>, tenv: TEnv): Result<TExp> =>
     isNonEmptyList<Exp>(exps) ?
         isEmpty(rest(exps)) ? typeofExp(first(exps), tenv) :
             bind(typeofExp(first(exps), tenv), _ => typeofExps(rest(exps), tenv)) :
         makeFailure(`Unexpected empty list of expressions`);
 
-
 // a number literal has type num-te
 export const typeofNum = (n: NumExp): NumTExp => makeNumTExp();
-
 // a boolean literal has type bool-te
 export const typeofBool = (b: BoolExp): BoolTExp => makeBoolTExp();
-
 // a string literal has type str-te
 const typeofStr = (s: StrExp): StrTExp => makeStrTExp();
 
-// primitive ops have known proc-te types
+/**
+ * Returns the type of a primitive operator.
+ * Includes support for cons, car, cdr, and polymorphic predicates.
+ */
 const numOpTExp = parseTE('(number * number -> number)');
 const numCompTExp = parseTE('(number * number -> boolean)');
 const boolOpTExp = parseTE('(boolean * boolean -> boolean)');
 
-// Todo: cons, car, cdr, list
 export const typeofPrim = (p: PrimOp): Result<TExp> =>
     (p.op === '+') ? numOpTExp :
         (p.op === '-') ? numOpTExp :
@@ -154,7 +168,6 @@ export const typeofPrim = (p: PrimOp): Result<TExp> =>
                             (p.op === '>') ? numCompTExp :
                                 (p.op === '<') ? numCompTExp :
                                     (p.op === '=') ? numCompTExp :
-                                        // Important to use a different signature for each op with a TVar to avoid capture
                                         (p.op === 'number?') ? parseTE('(T -> boolean)') :
                                             (p.op === 'boolean?') ? parseTE('(T -> boolean)') :
                                                 (p.op === 'string?') ? parseTE('(T -> boolean)') :
@@ -171,12 +184,10 @@ export const typeofPrim = (p: PrimOp): Result<TExp> =>
                                                                                             (p.op === 'cdr') ? parseTE('((Pair T1 T2) -> T2)') :
                                                                                                 makeFailure(`Primitive not yet implemented: ${p.op}`);
 
-// Purpose: compute the type of an if-exp
-// Typing rule:
-//   if type<test>(tenv) = boolean
-//      type<then>(tenv) = t1
-//      type<else>(tenv) = t1
-// then type<(if test then else)>(tenv) = t1
+/**
+ * Computes the type of an if-expression.
+ * Ensures the test is boolean and both branches have the same type.
+ */
 export const typeofIf = (ifExp: IfExp, tenv: TEnv): Result<TExp> => {
     const testTE = typeofExp(ifExp.test, tenv);
     const thenTE = typeofExp(ifExp.then, tenv);
@@ -190,10 +201,10 @@ export const typeofIf = (ifExp: IfExp, tenv: TEnv): Result<TExp> => {
             thenTE));
 };
 
-// Purpose: compute the type of a proc-exp
-// Typing rule:
-// If   type<body>(extend-tenv(x1=t1,...,xn=tn; tenv)) = t
-// then type<lambda (x1:t1,...,xn:tn) : t exp)>(tenv) = (t1 * ... * tn -> t)
+/**
+ * Computes the type of a procedure (lambda) expression.
+ * Checks that the body matches the annotated return type.
+ */
 export const typeofProc = (proc: ProcExp, tenv: TEnv): Result<TExp> => {
     const argsTEs = map((vd) => vd.texp, proc.args);
     const extTEnv = makeExtendTEnv(map((vd) => vd.var, proc.args), argsTEs, tenv);
@@ -202,14 +213,11 @@ export const typeofProc = (proc: ProcExp, tenv: TEnv): Result<TExp> => {
     return bind(constraint1, _ => makeOk(makeProcTExp(argsTEs, proc.returnTE)));
 };
 
-// Purpose: compute the type of an app-exp
-// Typing rule:
-// If   type<rator>(tenv) = (t1*..*tn -> t)
-//      type<rand1>(tenv) = t1
-//      ...
-//      type<randn>(tenv) = tn
-// then type<(rator rand1...randn)>(tenv) = t
-// We also check the correct number of arguments is passed.
+/**
+ * Computes the type of an application expression.
+ * Handles primitive ops (cons, car, cdr) specially for pairs.
+ * Otherwise, checks that the rator is a procedure and argument types match.
+ */
 export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> => {
     if (isPrimOp(app.rator)) {
         if (app.rator.op == 'cons')
@@ -248,8 +256,6 @@ export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> => {
         if (app.rands.length !== ratorTE.paramTEs.length) {
             return bind(unparse(app), (exp: string) => makeFailure<TExp>(`Wrong parameter numbers passed to proc: ${exp}`));
         }
-        // console.log("app.rands: ", app.rands);
-        // console.log("ratorTE.paramTEs: ", ratorTE.paramTEs);
         const constraints = zipWithResult((rand, trand) => bind(typeofExp(rand, tenv), (typeOfRand: TExp) =>
             checkEqualType(typeOfRand, trand, app)),
             app.rands, ratorTE.paramTEs);
@@ -257,13 +263,10 @@ export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> => {
     });
 }
 
-// Purpose: compute the type of a let-exp
-// Typing rule:
-// If   type<val1>(tenv) = t1
-//      ...
-//      type<valn>(tenv) = tn
-//      type<body>(extend-tenv(var1=t1,..,varn=tn; tenv)) = t
-// then type<let ((var1 val1) .. (varn valn)) body>(tenv) = t
+/**
+ * Computes the type of a let expression.
+ * Checks that binding values match their annotated types.
+ */
 export const typeofLet = (exp: LetExp, tenv: TEnv): Result<TExp> => {
     const vars = map((b) => b.var.var, exp.bindings);
     const vals = map((b) => b.val, exp.bindings);
@@ -274,17 +277,10 @@ export const typeofLet = (exp: LetExp, tenv: TEnv): Result<TExp> => {
     return bind(constraints, _ => typeofExps(exp.body, makeExtendTEnv(vars, varTEs, tenv)));
 };
 
-// Purpose: compute the type of a letrec-exp
-// We make the same assumption as in L4 that letrec only binds proc values.
-// Typing rule:
-//   (letrec((p1 (lambda (x11 ... x1n1) body1)) ...) body)
-//   tenv-body = extend-tenv(p1=(t11*..*t1n1->t1)....; tenv)
-//   tenvi = extend-tenv(xi1=ti1,..,xini=tini; tenv-body)
-// If   type<body1>(tenv1) = t1
-//      ...
-//      type<bodyn>(tenvn) = tn
-//      type<body>(tenv-body) = t
-// then type<(letrec((p1 (lambda (x11 ... x1n1) body1)) ...) body)>(tenv-body) = t
+/**
+ * Computes the type of a letrec expression.
+ * Only supports binding of procedures.
+ */
 export const typeofLetrec = (exp: LetrecExp, tenv: TEnv): Result<TExp> => {
     const ps = map((b) => b.var.var, exp.bindings);
     const procs = map((b) => b.val, exp.bindings);
@@ -303,16 +299,12 @@ export const typeofLetrec = (exp: LetrecExp, tenv: TEnv): Result<TExp> => {
     return bind(constraints, _ => typeofExps(exp.body, tenvBody));
 };
 
-// Typecheck a full program
-
-// Purpose: compute the type of a define
-// Typing rule:
-//   (define (var : texp) val)
+/**
+ * Computes the type of a define expression.
+ * Checks that the value matches the annotated type.
+ */
 export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
     const result = typeofExp(exp.val, tenv);
-    // console.log("result: ", result);
-    // console.log("exp.var.texp: ", exp.var.texp);
-    // console.log("exp.val: ", exp.val);
     if (isOk(result)) {
         const varTE = exp.var.texp;
         const valTE = result.value;
@@ -322,9 +314,10 @@ export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
     return makeFailure("Type mismatch");
 };
 
-// Purpose: compute the type of a program
-// Typing rule:
-// The type of a program is the type of the last expression, after threading the environment through all definitions.
+/**
+ * Computes the type of a program.
+ * The type of a program is the type of the last expression, after threading the environment through all definitions.
+ */
 export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
     const processExp = ([env, _]: [TEnv, Result<TExp>], e: Exp): [TEnv, Result<TExp>] => {
         if (isDefineExp(e)) {
@@ -355,7 +348,9 @@ export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
     return lastType;
 };
 
-// Purpose: compute the type of a concrete fully-typed program string
+/**
+ * Computes the type of a concrete fully-typed program string.
+ */
 export const L5programTypeof = (concreteExp: string): Result<string> =>
     bind(parseL5(concreteExp), (parsedProgram) =>
         isProgram(parsedProgram)
@@ -364,13 +359,19 @@ export const L5programTypeof = (concreteExp: string): Result<string> =>
             : makeFailure("Not a program")
     );
 
+/**
+ * Computes the type of a literal (quoted) expression.
+ * Handles quoted pairs, numbers, booleans, symbols, and empty lists.
+ * Quoted symbols and empty lists are typed as TVar("literal").
+ * Quoted pairs are recursively typed as PairTExp.
+ * Top-level atoms are always typed as "literal".
+ */
 const typeofLitExp = (le: LitExp): Result<TExp> => {
-
     // map an *inner* S-exp value to its TE
     const sexpToTExp = (v: SExpValue): TExp =>
         isCompoundSExp(v)
-            /* NEW: if the first element is the symbol 'quote, treat the
-               whole (quote …) form as an atomic literal. */
+            // if the first element is the symbol 'quote, treat the
+            // whole (quote …) form as an atomic literal.
             ? (isSymbolSExp(v.val1) && v.val1.val === "quote")
                 ? makeTVar("literal")
                 : makePairTExp(sexpToTExp(v.val1), sexpToTExp(v.val2))
@@ -391,7 +392,12 @@ const typeofLitExp = (le: LitExp): Result<TExp> => {
     );
 };
 
-// Helper: recognize type variable names (e.g., "T", "T1", "T2")
+/**
+ * Helper: recognize type variable names (e.g., "T", "T1", "T2").
+ * Used to distinguish between polymorphic type variables and literals.
+ */
 const isTypeVarName = (s: string): boolean =>
     /^T\d*$/.test(s);
+
+// ...end of file...
 
