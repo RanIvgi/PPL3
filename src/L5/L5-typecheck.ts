@@ -23,8 +23,8 @@ import { Result, makeFailure, bind, makeOk, zipWithResult, isOk, isFailure } fro
 import { parse as p } from "../shared/parser";
 import { format } from '../shared/format';
 import { isLitExp, LitExp } from "./L5-ast";
-import { SExpValue, isCompoundSExp, isSymbolSExp } from "./L5-value";
-import {makeTVar } from "./TExp";
+import { SExpValue, isCompoundSExp, isEmptySExp, isSymbolSExp } from "./L5-value";
+import { makeTVar } from "./TExp";
 
 // Purpose: Check that type expressions are equivalent
 // as part of a fully-annotated type check process of exp.
@@ -364,22 +364,27 @@ export const L5programTypeof = (concreteExp: string): Result<string> =>
             : makeFailure("Not a program")
     );
 
-// Purpose: Compute the type of a literal expression
 const typeofLitExp = (le: LitExp): Result<TExp> => {
-    // Recursively map an S-expression value to a TExp
+
+    // map an *inner* S-exp value to its TE
     const sexpToTExp = (v: SExpValue): TExp =>
-        isCompoundSExp(v)
+        isCompoundSExp(v)                      // dotted pair
             ? makePairTExp(sexpToTExp(v.val1), sexpToTExp(v.val2))
-            : typeof v === "number"
-                ? makeNumTExp()
-                : typeof v === "boolean"
-                    ? makeBoolTExp()
-                    : (isSymbolSExp(v) && isTypeVarName(v.val))
-                        ? makeTVar(v.val)
-                        : (typeof v === "string" && isTypeVarName(v))
-                            ? makeTVar(v)
-                            : makeTVar("literal");
-    return makeOk(sexpToTExp(le.val));
+            : isSymbolSExp(v) || isEmptySExp(v)    // symbol or '()
+                ? makeTVar("literal")
+                : typeof v === "number"
+                    ? makeNumTExp()
+                    : typeof v === "boolean"
+                        ? makeBoolTExp()
+                        : typeof v === "string"
+                            ? makeStrTExp()
+                            : makeTVar("literal");                 // fall-back
+
+    // *Top-level* atoms are always typed as the polymorphic “literal”
+    return makeOk(
+        isCompoundSExp(le.val) ? sexpToTExp(le.val)
+            : makeTVar("literal")
+    );
 };
 
 // Helper: recognize type variable names (e.g., "T", "T1", "T2")
