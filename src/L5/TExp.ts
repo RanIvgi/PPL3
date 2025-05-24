@@ -47,7 +47,7 @@ export const isAtomicTExp = (x: any): x is AtomicTExp =>
     isNumTExp(x) || isBoolTExp(x) || isStrTExp(x) || isVoidTExp(x);
 
 export type CompoundTExp = ProcTExp | TupleTExp | PairTExp;
-export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x);
+export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x) || isPairTExp(x);
 
 export type NonTupleTExp = AtomicTExp | ProcTExp | TVar;
 export const isNonTupleTExp = (x: any): x is NonTupleTExp =>
@@ -231,7 +231,7 @@ export const unparseTExp = (te: TExp): Result<string> => {
         x === undefined ? makeFailure("Undefined TVar") :
         isPairTExp(x) ? bind(unparseTExp(x.carTE), (car: string) =>
                         bind(unparseTExp(x.cdrTE), (cdr: string) =>
-                                    makeOk(`(${car} * ${cdr})`))) :
+                                    makeOk(`(Pair ${car} ${cdr})`))) :
         x;
 
     const unparsed = up(te);

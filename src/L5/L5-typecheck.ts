@@ -12,9 +12,11 @@ import { applyTEnv, makeEmptyTEnv, makeExtendTEnv, TEnv } from "./TEnv";
 import {
     isProcTExp, makeBoolTExp, makeNumTExp, makeProcTExp, makeStrTExp, makeVoidTExp,
     parseTE, unparseTExp,
-    BoolTExp, NumTExp, StrTExp, TExp, VoidTExp
+    BoolTExp, NumTExp, StrTExp, TExp, VoidTExp,
+    isTVar,
+    TVar
 } from "./TExp";
-import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '../shared/list';
+import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList, cons } from '../shared/list';
 import { Result, makeFailure, bind, makeOk, zipWithResult, isOk, isFailure } from '../shared/result';
 import { parse as p } from "../shared/parser";
 import { format } from '../shared/format';
@@ -23,12 +25,52 @@ import { format } from '../shared/format';
 // as part of a fully-annotated type check process of exp.
 // Return an error if the types are different - true otherwise.
 // Exp is only passed for documentation purposes.
-const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> =>
-    equals(te1, te2) ? makeOk(true) :
+const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
+    // console.log("checkEqualType: ", te1, te2, exp);
+
+    // Handle TVar unification
+    if (te1.tag === "TVar") {
+        return unifyTVar(te1, te2, exp);
+    }
+    if (te2.tag === "TVar") {
+        return unifyTVar(te2, te1, exp);
+    }
+
+    // Handle PairTExp (compound types)
+    if (te1.tag === "PairTExp" && te2.tag === "PairTExp") {
+        return bind(checkEqualType(te1.carTE, te2.carTE, exp), () =>
+            checkEqualType(te1.cdrTE, te2.cdrTE, exp));
+    }
+
+    // Check for structural equality
+    return equals(te1, te2) ? makeOk(true) :
         bind(unparseTExp(te1), (te1: string) =>
             bind(unparseTExp(te2), (te2: string) =>
                 bind(unparse(exp), (exp: string) =>
                     makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
+};
+
+const unifyTVar = (tvar: TVar, texp: TExp, exp: Exp): Result<true> => {
+    // console.log("unifyTVar: ", tvar, texp, exp);
+
+    if (tvar.contents[0] === undefined) {
+        // If the TVar is unbound, bind it to the given type
+        tvar.contents[0] = texp;
+        return makeOk(true);
+    } else {
+        // If the TVar is already bound, check for compatibility
+        const boundType = tvar.contents[0];
+        if (equals(boundType, texp)) {
+            return makeOk(true); // Already compatible
+        } else if (isTVar(boundType)) {
+            // Recursively unify if the bound type is another TVar
+            return unifyTVar(boundType, texp, exp);
+        } else {
+            // Otherwise, check structural compatibility
+            return checkEqualType(boundType, texp, exp);
+        }
+    }
+};
 
 // Compute the type of L5 AST exps to TE
 // ===============================================
@@ -161,6 +203,8 @@ export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> =>
         if (app.rands.length !== ratorTE.paramTEs.length) {
             return bind(unparse(app), (exp: string) => makeFailure<TExp>(`Wrong parameter numbers passed to proc: ${exp}`));
         }
+        // console.log("app.rands: ", app.rands);
+        // console.log("ratorTE.paramTEs: ", ratorTE.paramTEs);
         const constraints = zipWithResult((rand, trand) => bind(typeofExp(rand, tenv), (typeOfRand: TExp) =>
             checkEqualType(typeOfRand, trand, app)),
             app.rands, ratorTE.paramTEs);
@@ -220,6 +264,9 @@ export const typeofLetrec = (exp: LetrecExp, tenv: TEnv): Result<TExp> => {
 //   (define (var : texp) val)
 export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
     const result = typeofExp(exp.val, tenv);
+    // console.log("result: ", result);
+    // console.log("exp.var.texp: ", exp.var.texp);
+    // console.log("exp.val: ", exp.val);
     if (isOk(result)) {
         const varTE = exp.var.texp;
         const valTE = result.value;
