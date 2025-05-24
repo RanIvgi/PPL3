@@ -368,9 +368,13 @@ const typeofLitExp = (le: LitExp): Result<TExp> => {
 
     // map an *inner* S-exp value to its TE
     const sexpToTExp = (v: SExpValue): TExp =>
-        isCompoundSExp(v)                      // dotted pair
-            ? makePairTExp(sexpToTExp(v.val1), sexpToTExp(v.val2))
-            : isSymbolSExp(v) || isEmptySExp(v)    // symbol or '()
+        isCompoundSExp(v)
+            /* NEW: if the first element is the symbol 'quote, treat the
+               whole (quote …) form as an atomic literal. */
+            ? (isSymbolSExp(v.val1) && v.val1.val === "quote")
+                ? makeTVar("literal")
+                : makePairTExp(sexpToTExp(v.val1), sexpToTExp(v.val2))
+            : isSymbolSExp(v) || isEmptySExp(v)
                 ? makeTVar("literal")
                 : typeof v === "number"
                     ? makeNumTExp()
@@ -378,7 +382,7 @@ const typeofLitExp = (le: LitExp): Result<TExp> => {
                         ? makeBoolTExp()
                         : typeof v === "string"
                             ? makeStrTExp()
-                            : makeTVar("literal");                 // fall-back
+                            : makeTVar("literal");                // fall-back
 
     // *Top-level* atoms are always typed as the polymorphic “literal”
     return makeOk(
